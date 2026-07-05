@@ -8,10 +8,36 @@ rendered PDF side by side, with **bidirectional SyncTeX highlighting**:
 - **Alt-click a line in the editor** (or click its line number) → the
   matching region of the PDF is highlighted and scrolled into view.
 
-The UI is a static web page; a tiny Python server (standard library only)
-compiles through your local TeX installation with `-synctex=1`.
+It runs in two modes with the same UI:
 
-## Usage
+1. **Local mode** — a tiny Python server (standard library only) compiles
+   through your local TeX installation with `-synctex=1`.
+2. **In-browser mode (GitHub Pages)** — opened as a static page, it compiles
+   with a real pdfTeX built to WebAssembly ([busytex](https://github.com/busytex/busytex),
+   with a TeX Live basic tree + latex-recommended/fonts/science bundles).
+   No server, no install: the engine (~140 MB) downloads on first use and is
+   cached by the browser (Cache Storage) afterwards. SyncTeX works
+   identically in both modes.
+
+## In-browser mode (the GitHub Pages deployment)
+
+- **Open** uploads files: the first `.tex` becomes the document; figures,
+  `.bib`, and `\input` files join the project (see the "+N files" badge).
+  Drag-and-drop works too.
+- **Save** downloads the `.tex`; **PDF ↓** downloads the compiled PDF.
+- The document autosaves to localStorage, so reloading the page restores it.
+- BibTeX runs automatically (bibtex8) when the document has a
+  `\bibliography`.
+- Font note: the WASM tree cannot rasterize Computer Modern bitmap fonts
+  (no Metafont), so documents that need them (e.g. `\textbullet` via the
+  TS1 encoding) are automatically retried with `\usepackage{lmodern}` —
+  Latin Modern, visually near-identical, injected on the `\documentclass`
+  line so SyncTeX line numbers are unaffected.
+- Packages beyond the bundled collections (basic + latex-base +
+  latex-recommended + fonts-recommended + science) are not available; the
+  status bar names anything unresolved.
+
+## Local mode usage
 
 ```sh
 python3 serve.py example.tex        # open a file
@@ -58,6 +84,9 @@ Notes:
 - `index.html`, `style.css`, `app.js` — the UI (CodeMirror + pdf.js)
 - `synctex.js` — SyncTeX parser and forward/reverse query logic
 - `vendor/` — vendored libraries (works offline)
+- `wasm/` — in-browser engine: `texsync-worker.js` (our worker: synctex,
+  reruns, caching, lmodern fallback) wrapping `busytex_pipeline.js` and the
+  busytex WASM/TeX Live binaries (MIT-licensed, from the busytex project)
 - `example.tex` — two-page demo exercising the sync
 
 ## How the sync works

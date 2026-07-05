@@ -29,6 +29,27 @@ body {
 }
 #brand { font-weight: 700; letter-spacing: .02em; margin-right: 6px; }
 #brand em { color: var(--accent); font-style: normal; }
+#modeBadge {
+  font-size: 10.5px; padding: 2px 7px; border-radius: 9px;
+  background: #2b4162; color: #9ec3f5; cursor: help;
+}
+#filesBadge {
+  font-size: 11px; padding: 2px 8px; border-radius: 9px;
+  background: #3a414c; color: var(--fg-dim); cursor: pointer;
+}
+#filesBadge:hover { background: #48505c; }
+#filesPanel {
+  position: fixed; top: calc(var(--toolbar-h) + 4px); right: 12px; z-index: 20;
+  background: var(--bg-panel); border: 1px solid #3a414c; border-radius: 6px;
+  padding: 6px 10px; max-height: 40vh; overflow: auto; min-width: 24ch;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+.file-row { padding: 2px 0; }
+.file-row button {
+  background: none; border: none; color: var(--err); cursor: pointer;
+  font-size: 14px; padding: 0 4px;
+}
+#toolbar button:disabled { opacity: .45; cursor: default; }
 #toolbar button, #statusbar button {
   background: #2d333c; color: var(--fg);
   border: 1px solid #3a414c; border-radius: 5px;

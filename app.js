@@ -9,6 +9,21 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get('token') || '';
 
+/* Two backends: launched via serve.py (token in URL) -> local server
+ * compiles with the real TeX installation; opened as a static page
+ * (GitHub Pages) -> busytex WASM engine compiles in a Web Worker. */
+const SERVER_MODE = !!TOKEN;
+
+const WASM = {
+  active: !SERVER_MODE,
+  worker: null,
+  failed: false,
+  readyPromise: null,
+  files: new Map(),    // extra project files: name -> Uint8Array (figures, .bib, \input .tex)
+  pending: new Map(),  // compile id -> {resolve, reject}
+  seq: 0,
+};
+
 const state = {
   path: null,          // absolute path of the open file, or null for untitled
   name: 'untitled.tex',
@@ -46,6 +61,7 @@ const editor = CodeMirror.fromTextArea($('code'), {
 
 editor.on('change', () => {
   setDirty(true);
+  if (WASM.active) scheduleLocalSave();
   if (state.autoCompile) scheduleCompile();
 });
 
@@ -112,6 +128,11 @@ async function loadFile(path) {
 }
 
 async function saveFile(force) {
+  if (WASM.active) {
+    downloadBlob(state.name, new Blob([editor.getValue()], { type: 'text/plain' }));
+    setStatus('downloaded ' + state.name, 'ok');
+    return true;
+  }
   let path = state.path;
   if (!path) {
     path = window.prompt('Save as (absolute path):', '~/untitled.tex');
@@ -146,7 +167,162 @@ async function saveFile(force) {
 let compileTimer = null;
 function scheduleCompile() {
   clearTimeout(compileTimer);
-  compileTimer = setTimeout(compile, 1200);
+  compileTimer = setTimeout(compile, WASM.active ? 2500 : 1200);
+}
+
+/* ---------------- wasm backend ---------------- */
+
+const MB = (n) => (n / 1048576).toFixed(1);
+
+async function wasmBoot() {
+  let manifest;
+  try {
+    manifest = await (await fetch('wasm/manifest.json')).json();
+  } catch (e) {
+    WASM.failed = true;
+    setStatus('✗ engine assets missing — this deployment has no wasm/ bundle', 'err');
+    return false;
+  }
+  WASM.worker = new Worker('wasm/texsync-worker.js');
+  let readyResolve, readyReject;
+  WASM.readyPromise = new Promise((res, rej) => { readyResolve = res; readyReject = rej; });
+  WASM.readyPromise.catch(() => {}); // avoid unhandled rejection noise
+
+  WASM.worker.onmessage = ({ data }) => {
+    if (data.type === 'progress') {
+      const pct = data.total ? ` (${MB(data.loaded)}/${MB(data.total)} MB)` : ` (${MB(data.loaded)} MB)`;
+      setStatus(`downloading TeX engine: ${data.label}${pct} — one-time, cached afterwards`, 'busy');
+    } else if (data.type === 'status') {
+      setStatus(data.message, 'busy');
+    } else if (data.type === 'ready') {
+      readyResolve();
+    } else if (data.type === 'result') {
+      const p = WASM.pending.get(data.id);
+      if (p) { WASM.pending.delete(data.id); p.resolve(data); }
+    } else if (data.type === 'error') {
+      const p = data.id && WASM.pending.get(data.id);
+      if (p) { WASM.pending.delete(data.id); p.reject(new Error(data.message)); }
+      else { WASM.failed = true; readyReject(new Error(data.message)); setStatus('✗ engine: ' + data.message, 'err'); }
+    }
+  };
+  WASM.worker.onerror = (e) => {
+    WASM.failed = true;
+    readyReject(new Error(e.message || 'worker failed'));
+    setStatus('✗ engine worker failed: ' + (e.message || ''), 'err');
+  };
+  WASM.worker.postMessage({ type: 'init', config: manifest });
+  return true;
+}
+
+function wasmCompile(files, main) {
+  if (WASM.failed) return Promise.reject(new Error('in-browser engine unavailable'));
+  return WASM.readyPromise.then(() => new Promise((resolve, reject) => {
+    const id = ++WASM.seq;
+    WASM.pending.set(id, { resolve, reject });
+    WASM.worker.postMessage({ type: 'compile', id, files, main });
+  }));
+}
+
+/* JS port of serve.py's parse_log_errors (log produced with -file-line-error) */
+function parseLatexLog(log) {
+  const errors = [];
+  for (const line of log.split('\n')) {
+    const m = line.match(/^(?:\.\/)?(.+?\.\w+):(\d+):\s*(.*)$/);
+    if (m && !line.startsWith('l.')) errors.push({ file: m[1], line: +m[2], message: m[3] });
+    else if (line.startsWith('! ') && !errors.length) errors.push({ file: null, line: null, message: line.slice(2) });
+    if (errors.length >= 30) break;
+  }
+  return errors;
+}
+
+/* localStorage persistence for in-browser mode */
+let localSaveTimer = null;
+function scheduleLocalSave() {
+  clearTimeout(localSaveTimer);
+  localSaveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem('texsync.doc', JSON.stringify({ name: state.name, source: editor.getValue() }));
+      setDirty(false);
+    } catch (e) { /* quota — keep dirty */ }
+  }, 600);
+}
+
+function downloadBlob(name, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+/* uploads: first .tex in a selection becomes the document; everything else
+ * (figures, .bib, further .tex for \input) joins the project file set */
+async function addUploadedFiles(fileList) {
+  let mainLoaded = false;
+  for (const f of fileList) {
+    if (/\.tex$/i.test(f.name) && !mainLoaded) {
+      const text = await f.text();
+      if (state.dirty && editor.getValue().trim() && !confirm(`Replace the current document with ${f.name}?`)) continue;
+      setFile(null, f.name);
+      setSource(text);
+      scheduleLocalSave();
+      mainLoaded = true;
+    } else {
+      WASM.files.set(f.name, new Uint8Array(await f.arrayBuffer()));
+    }
+  }
+  updateFilesBadge();
+  if (fileList.length) {
+    toast(mainLoaded ? `Loaded ${state.name}` + (fileList.length > 1 ? ` + ${fileList.length - 1} project file(s)` : '')
+                     : `Added ${fileList.length} project file(s)`);
+    compile();
+  }
+}
+
+function updateFilesBadge() {
+  const b = $('filesBadge');
+  b.hidden = WASM.files.size === 0;
+  b.textContent = `+${WASM.files.size} file${WASM.files.size === 1 ? '' : 's'}`;
+  const panel = $('filesPanel');
+  panel.innerHTML = '';
+  for (const name of WASM.files.keys()) {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    const del = document.createElement('button');
+    del.textContent = '×';
+    del.title = 'remove';
+    del.addEventListener('click', () => { WASM.files.delete(name); updateFilesBadge(); });
+    row.appendChild(del);
+    row.appendChild(document.createTextNode(' ' + name));
+    panel.appendChild(row);
+  }
+  if (WASM.files.size === 0) panel.hidden = true;
+}
+
+/* Run one compile on whichever backend is active; returns a normalized
+ * result: {conflict, ok, errors, log, pdfBytes, synctexBytes, gz, dir,
+ * mainfile, mtime}. */
+async function backendCompile(sent, force) {
+  if (WASM.active) {
+    const files = [{ path: state.name, contents: sent }];
+    for (const [p, c] of WASM.files) files.push({ path: p, contents: c });
+    const r = await wasmCompile(files, state.name);
+    return {
+      conflict: false, ok: !!r.ok,
+      errors: parseLatexLog(r.log || ''), log: r.log || '',
+      pdfBytes: r.pdf || null, synctexBytes: r.synctex || null, gz: !!r.gz,
+      dir: '/home/web_user/project_dir', mainfile: state.name, mtime: null,
+    };
+  }
+  const res = await api('/api/compile',
+    { source: sent, path: state.path, mtime: state.mtime, force: !!force });
+  return {
+    conflict: !!res.conflict, ok: !!res.ok,
+    errors: res.errors || [], log: res.log || '',
+    pdfBytes: res.pdf ? b64ToBytes(res.pdf) : null,
+    synctexBytes: res.synctex ? b64ToBytes(res.synctex) : null, gz: !!res.gz,
+    dir: res.dir || null, mainfile: res.mainfile || null, mtime: res.mtime || null,
+  };
 }
 
 async function compile(manual, force) {
@@ -158,8 +334,7 @@ async function compile(manual, force) {
   const sent = editor.getValue();
   let redoForced = false;
   try {
-    const res = await api('/api/compile',
-      { source: sent, path: state.path, mtime: state.mtime, force: !!force });
+    const res = await backendCompile(sent, force);
     if (res.conflict) {
       // The file changed on disk (external editor, Dropbox sync, …).
       // Never overwrite silently from an auto-compile; ask on a manual one.
@@ -171,29 +346,29 @@ async function compile(manual, force) {
       }
       return;
     }
-    state.compileDir = res.dir || null;
-    state.mainfile = res.mainfile || null;
+    state.compileDir = res.dir;
+    state.mainfile = res.mainfile;
     if (res.mtime) state.mtime = res.mtime;
     // compile saves the file — but only mark clean if nothing changed meanwhile
     if (state.path && editor.getValue() === sent) setDirty(false);
 
-    showErrors(res.errors || [], res.log || '');
+    showErrors(res.errors, res.log);
 
-    if (res.pdf) {
-      const bytes = b64ToBytes(res.pdf);
-      state.pdfData = bytes;
-      if (res.synctex) {
-        const raw = b64ToBytes(res.synctex);
-        const text = res.gz ? pako.ungzip(raw, { to: 'string' }) : new TextDecoder().decode(raw);
+    if (res.pdfBytes) {
+      state.pdfData = res.pdfBytes;
+      $('btnPdf').disabled = false;
+      if (res.synctexBytes) {
+        const text = res.gz ? pako.ungzip(res.synctexBytes, { to: 'string' })
+                            : new TextDecoder().decode(res.synctexBytes);
         state.synctex = SyncTeX.parse(text);
         state.mainTag = findMainTag();
       } else {
         state.synctex = null;
       }
-      await renderPdf(bytes);
+      await renderPdf(res.pdfBytes);
     }
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    if (res.errors && res.errors.length) {
+    if (res.errors.length) {
       setStatus(`✗ ${res.errors.length} error${res.errors.length > 1 ? 's' : ''} (${secs}s) — click "log"`, 'err');
     } else if (res.ok) {
       setStatus(`✓ compiled in ${secs}s`, 'ok');
@@ -517,14 +692,40 @@ function toast(msg) {
 
 $('btnNew').addEventListener('click', () => {
   if (state.dirty && !confirm('Discard unsaved changes?')) return;
-  setFile(null, 'untitled.tex');
+  setFile(null, WASM.active ? 'main.tex' : 'untitled.tex');
   state.mtime = null;
   setSource(TEMPLATE);
+  if (WASM.active) scheduleLocalSave();
 });
 
 $('btnOpen').addEventListener('click', () => {
+  if (WASM.active) { $('fileInput').click(); return; }
   const path = window.prompt('Open file (absolute path):', state.path || '~/');
   if (path) loadFile(path);
+});
+
+$('fileInput').addEventListener('change', (e) => {
+  addUploadedFiles(Array.from(e.target.files));
+  e.target.value = '';
+});
+
+$('btnPdf').addEventListener('click', () => {
+  if (!state.pdfData) return;
+  downloadBlob(state.name.replace(/\.tex$/i, '') + '.pdf',
+    new Blob([state.pdfData], { type: 'application/pdf' }));
+});
+
+$('filesBadge').addEventListener('click', () => {
+  const p = $('filesPanel');
+  p.hidden = !p.hidden;
+});
+
+// drag & drop files anywhere (in-browser mode)
+document.addEventListener('dragover', (e) => { if (WASM.active) e.preventDefault(); });
+document.addEventListener('drop', (e) => {
+  if (!WASM.active || !e.dataTransfer.files.length) return;
+  e.preventDefault();
+  addUploadedFiles(Array.from(e.dataTransfer.files));
 });
 
 $('btnSave').addEventListener('click', () => saveFile());
@@ -557,7 +758,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('beforeunload', (e) => {
-  if (state.dirty) { e.preventDefault(); e.returnValue = ''; }
+  // in-browser mode autosaves to localStorage, no need to warn
+  if (state.dirty && !WASM.active) { e.preventDefault(); e.returnValue = ''; }
 });
 
 // draggable divider
@@ -609,6 +811,20 @@ line here; alt-click a line here to highlight it in the PDF.
 
 (async function boot() {
   $('pdfPages').innerHTML = '<div id="pdfEmpty">Compile to see the PDF</div>';
+
+  if (WASM.active) {
+    // static deployment (GitHub Pages): in-browser engine + localStorage
+    $('modeBadge').hidden = false;
+    $('btnSave').title = 'Download the .tex file';
+    $('btnOpen').title = 'Upload .tex, figures, .bib …';
+    let restored = null;
+    try { restored = JSON.parse(localStorage.getItem('texsync.doc') || 'null'); } catch (e) {}
+    setFile(null, (restored && restored.name) || 'main.tex');
+    setSource(restored ? restored.source : TEMPLATE);
+    if (await wasmBoot()) compile();
+    return;
+  }
+
   try {
     const data = await api('/api/load');
     if (data.path) {

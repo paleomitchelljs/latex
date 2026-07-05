@@ -1,0 +1,35 @@
+# LaTeX build artifacts (the editor compiles next to the .tex file)
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.synctex.gz
+*.synctex
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
+*.pdf
+
+# Python
+__pycache__/
+*.py[co]
+
+# busytex archives (the .data/.wasm binaries ARE committed — texlive-basic.data
+# is 99.7 MiB, just under GitHub's 100 MiB hard limit)
+wasm/*.tar.gz
+
+# macOS / OS junk
+.DS_Store
+._*
+Thumbs.db
+
+# Claude Code session config, memory documents, and working notes
+.claude/
+memory/
+notes/
+notes*.md
+*.notes.md
+scratch*

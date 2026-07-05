@@ -1,0 +1,11 @@
+{
+  "packages": [
+    "texlive-basic.js",
+    "ubuntu-texlive-latex-base.js",
+    "ubuntu-texlive-latex-recommended.js",
+    "ubuntu-texlive-fonts-recommended.js",
+    "ubuntu-texlive-science.js"
+  ],
+  "preload": ["texlive-basic.js"],
+  "chunks": {}
+}

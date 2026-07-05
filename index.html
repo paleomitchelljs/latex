@@ -11,15 +11,19 @@
 <body>
 <header id="toolbar">
   <span id="brand">TeX<em>sync</em></span>
+  <span id="modeBadge" title="Compiling in your browser via WebAssembly — no server involved" hidden>in-browser</span>
   <button id="btnNew" title="New document">New</button>
   <button id="btnOpen" title="Open a .tex file by path">Open</button>
   <button id="btnSave" title="Save (⌘S)">Save</button>
+  <button id="btnPdf" title="Download the compiled PDF" disabled>PDF ↓</button>
   <button id="btnCompile" title="Compile (⌘⏎)">Compile</button>
   <label class="toggle" title="Recompile automatically as you type">
     <input type="checkbox" id="chkAuto" checked> auto
   </label>
   <span id="fileName" class="filename">untitled.tex</span>
   <span id="dirtyDot" title="unsaved changes" hidden>●</span>
+  <span id="filesBadge" title="project files (figures, .bib, …) — click to manage" hidden></span>
+  <input type="file" id="fileInput" multiple hidden>
   <span class="spacer"></span>
   <span id="syncHint" title="Click anywhere in the PDF to jump to that spot in the source.&#10;Alt-click in the editor (or click a line number) to highlight that line in the PDF.">sync: PDF→click · source→alt-click ⓘ</span>
   <span class="zoom">
@@ -51,6 +55,7 @@
 </footer>
 
 <div id="toast" hidden></div>
+<div id="filesPanel" hidden></div>
 
 <script src="vendor/codemirror.min.js"></script>
 <script src="vendor/stex.min.js"></script>
