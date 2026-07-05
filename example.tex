@@ -1,0 +1,48 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+
+\title{SyncTeX Demo Document}
+\author{J.~Mitchell}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+This paragraph exists so that clicking on it in the PDF viewer
+jumps to the corresponding source line in the editor. Each source
+line maps to a region of the rendered page, and SyncTeX records
+that correspondence during compilation.
+
+\section{Some Mathematics}
+The time-independent Schr\"odinger equation reads
+\begin{equation}
+  -\frac{\hbar^2}{2m}\nabla^2\psi + V(\mathbf{r})\psi = E\psi,
+  \label{eq:tise}
+\end{equation}
+and Equation~\eqref{eq:tise} is referenced here to exercise the
+two-pass compilation logic.
+
+\subsection{A List}
+\begin{itemize}
+  \item First item on its own source line.
+  \item Second item, also on its own line.
+  \item Third item, likewise.
+\end{itemize}
+
+\newpage
+\section{Second Page}
+This text lives on page two, so that cross-page synchronization
+can be verified. Clicking here should land on this paragraph in
+the source file, not somewhere on page one.
+
+\begin{align}
+  e^{i\pi} + 1 &= 0, \\
+  \int_{-\infty}^{\infty} e^{-x^2}\,dx &= \sqrt{\pi}.
+\end{align}
+
+The final paragraph of the demo document closes out page two with
+a few more words to click on.
+
+\end{document}

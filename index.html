@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LaTeX Editor</title>
+<link rel="stylesheet" href="vendor/codemirror.min.css">
+<link rel="stylesheet" href="vendor/dialog.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="toolbar">
+  <span id="brand">TeX<em>sync</em></span>
+  <button id="btnNew" title="New document">New</button>
+  <button id="btnOpen" title="Open a .tex file by path">Open</button>
+  <button id="btnSave" title="Save (⌘S)">Save</button>
+  <button id="btnCompile" title="Compile (⌘⏎)">Compile</button>
+  <label class="toggle" title="Recompile automatically as you type">
+    <input type="checkbox" id="chkAuto" checked> auto
+  </label>
+  <span id="fileName" class="filename">untitled.tex</span>
+  <span id="dirtyDot" title="unsaved changes" hidden>●</span>
+  <span class="spacer"></span>
+  <span id="syncHint" title="Click anywhere in the PDF to jump to that spot in the source.&#10;Alt-click in the editor (or click a line number) to highlight that line in the PDF.">sync: PDF→click · source→alt-click ⓘ</span>
+  <span class="zoom">
+    <button id="btnZoomOut" title="Zoom out">−</button>
+    <button id="btnZoomFit" title="Fit width">fit</button>
+    <button id="btnZoomIn" title="Zoom in">+</button>
+  </span>
+</header>
+
+<main id="split">
+  <section id="editorPane">
+    <textarea id="code"></textarea>
+  </section>
+  <div id="divider"></div>
+  <section id="pdfPane">
+    <div id="pdfScroll"><div id="pdfPages"></div></div>
+    <div id="logPanel" hidden>
+      <div id="logHead"><span>Compile log</span><button id="btnCloseLog">×</button></div>
+      <div id="errList"></div>
+      <pre id="logText"></pre>
+    </div>
+  </section>
+</main>
+
+<footer id="statusbar">
+  <span id="status">ready</span>
+  <span class="spacer"></span>
+  <button id="btnLog" title="Show compile log">log</button>
+</footer>
+
+<div id="toast" hidden></div>
+
+<script src="vendor/codemirror.min.js"></script>
+<script src="vendor/stex.min.js"></script>
+<script src="vendor/active-line.min.js"></script>
+<script src="vendor/matchbrackets.min.js"></script>
+<script src="vendor/dialog.min.js"></script>
+<script src="vendor/searchcursor.min.js"></script>
+<script src="vendor/search.min.js"></script>
+<script src="vendor/jump-to-line.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/pako_inflate.min.js"></script>
+<script src="synctex.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

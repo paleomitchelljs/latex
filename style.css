@@ -1,0 +1,146 @@
+:root {
+  --bg: #1e2127;
+  --bg-panel: #23272e;
+  --fg: #d8dee9;
+  --fg-dim: #8b93a1;
+  --accent: #4f9cf7;
+  --err: #e5534b;
+  --ok: #57ab5a;
+  --hl: rgba(255, 213, 0, 0.45);
+  --toolbar-h: 42px;
+  --status-h: 26px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  font: 13px/1.4 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--fg);
+  overflow: hidden;
+}
+
+/* ---- toolbar ---- */
+#toolbar {
+  height: var(--toolbar-h); flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  background: var(--bg-panel); border-bottom: 1px solid #111;
+}
+#brand { font-weight: 700; letter-spacing: .02em; margin-right: 6px; }
+#brand em { color: var(--accent); font-style: normal; }
+#toolbar button, #statusbar button {
+  background: #2d333c; color: var(--fg);
+  border: 1px solid #3a414c; border-radius: 5px;
+  padding: 4px 10px; font: inherit; cursor: pointer;
+}
+#toolbar button:hover, #statusbar button:hover { background: #39414d; }
+#toolbar .toggle { display: flex; align-items: center; gap: 4px; color: var(--fg-dim); cursor: pointer; }
+.filename { margin-left: 10px; color: var(--fg-dim); max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dirtyDot { color: var(--accent); }
+.spacer { flex: 1; }
+#syncHint { color: var(--fg-dim); font-size: 12px; cursor: help; }
+.zoom button { padding: 4px 8px; }
+
+/* ---- split layout ---- */
+#split { flex: 1; display: flex; min-height: 0; }
+#editorPane { flex: 0 0 46%; min-width: 200px; display: flex; min-height: 0; }
+#divider { flex: 0 0 5px; cursor: col-resize; background: #111; }
+#divider:hover { background: var(--accent); }
+#pdfPane { flex: 1; min-width: 200px; position: relative; display: flex; flex-direction: column; background: #2a2e36; }
+
+/* ---- editor ---- */
+.CodeMirror {
+  flex: 1; height: auto; font: 13.5px/1.55 "SF Mono", Menlo, Consolas, monospace;
+  background: #1b1e24; color: #d8dee9;
+}
+.CodeMirror-gutters { background: #181b20; border-right: 1px solid #111; }
+.CodeMirror-linenumber { color: #555e6c; cursor: pointer; }
+.CodeMirror-cursor { border-left: 2px solid #d8dee9; }
+.CodeMirror-selected { background: #33415e !important; }
+.CodeMirror-activeline-background { background: rgba(255,255,255,0.045); }
+.cm-s-default .cm-keyword { color: #7aa2f7; }
+.cm-s-default .cm-tag { color: #e0af68; }
+.cm-s-default .cm-bracket { color: #89ddff; }
+.cm-s-default .cm-comment { color: #5c6370; font-style: italic; }
+.cm-s-default .cm-atom { color: #c678dd; }
+.cm-s-default .cm-number { color: #d19a66; }
+.cm-s-default .cm-builtin { color: #56b6c2; }
+.cm-s-default .cm-string { color: #98c379; }
+.cm-s-default .cm-error { color: inherit; background: none; }
+.cm-matchingbracket { color: #ffd700 !important; background: rgba(255,215,0,.18); }
+
+/* search / jump dialogs (CodeMirror dialog addon), restyled for dark UI */
+.CodeMirror-dialog {
+  background: var(--bg-panel); color: var(--fg);
+  border-bottom: 1px solid #111; padding: 4px 8px;
+}
+.CodeMirror-dialog input {
+  background: #1b1e24; color: var(--fg);
+  border: 1px solid #3a414c; border-radius: 4px; padding: 2px 6px;
+  font-family: inherit; outline: none;
+}
+.CodeMirror-search-hint { color: var(--fg-dim); }
+.cm-searching { background: rgba(255, 213, 0, 0.25); }
+
+.sync-line { background: rgba(79, 156, 247, 0.28) !important; transition: background 1.2s ease; }
+.sync-line-fade { background: transparent !important; }
+.err-line { background: rgba(229, 83, 75, 0.22) !important; }
+
+/* ---- PDF pane ---- */
+#pdfScroll { flex: 1; overflow: auto; padding: 16px 0; }
+#pdfPages { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.page { position: relative; box-shadow: 0 2px 12px rgba(0,0,0,.5); background: #fff; cursor: crosshair; }
+.page canvas { display: block; }
+
+.sync-highlight {
+  position: absolute; background: var(--hl);
+  border-radius: 2px; pointer-events: none;
+  animation: fadeout 2.4s ease forwards;
+}
+.click-mark {
+  position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+  border: 2px solid var(--accent); border-radius: 50%;
+  pointer-events: none; animation: fadeout 1.2s ease forwards;
+}
+@keyframes fadeout { 0% {opacity: 1;} 70% {opacity: 1;} 100% {opacity: 0;} }
+
+#pdfEmpty { color: var(--fg-dim); text-align: center; margin-top: 30vh; }
+
+/* ---- log panel ---- */
+#logPanel {
+  flex: 0 0 40%; display: flex; flex-direction: column;
+  border-top: 1px solid #111; background: var(--bg-panel);
+  min-height: 0;
+}
+#logPanel[hidden] { display: none; }
+#logHead { display: flex; justify-content: space-between; align-items: center; padding: 4px 10px; color: var(--fg-dim); }
+#logHead button { background: none; border: none; color: var(--fg-dim); font-size: 16px; cursor: pointer; }
+#errList { flex: 0 0 auto; max-height: 40%; overflow: auto; }
+.err-item { padding: 3px 12px; cursor: pointer; color: #f0a8a4; }
+.err-item:hover { background: #39414d; }
+.err-item .loc { color: var(--fg-dim); margin-right: 6px; }
+#logText {
+  flex: 1; margin: 0; padding: 8px 12px; overflow: auto;
+  font: 11.5px/1.45 "SF Mono", Menlo, monospace; color: var(--fg-dim);
+  white-space: pre-wrap;
+}
+
+/* ---- status bar ---- */
+#statusbar {
+  height: var(--status-h); flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  background: var(--bg-panel); border-top: 1px solid #111;
+  font-size: 12px; color: var(--fg-dim);
+}
+#status.ok { color: var(--ok); }
+#status.err { color: var(--err); }
+#status.busy { color: var(--accent); }
+#statusbar button { padding: 1px 8px; font-size: 11px; }
+
+/* ---- toast ---- */
+#toast {
+  position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+  background: #000c; color: #fff; padding: 8px 16px; border-radius: 6px;
+  z-index: 10; max-width: 70ch;
+}
