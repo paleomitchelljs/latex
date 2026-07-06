@@ -214,11 +214,25 @@ async function wasmBoot() {
   return true;
 }
 
+const WASM_COMPILE_TIMEOUT = 180000;
+
 function wasmCompile(files, main) {
   if (WASM.failed) return Promise.reject(new Error('in-browser engine unavailable'));
   return WASM.readyPromise.then(() => new Promise((resolve, reject) => {
     const id = ++WASM.seq;
-    WASM.pending.set(id, { resolve, reject });
+    // watchdog: a wedged engine gets killed and rebooted (assets are
+    // cached, so the reboot is quick) instead of spinning forever
+    const timer = setTimeout(() => {
+      WASM.pending.delete(id);
+      try { WASM.worker.terminate(); } catch (e) {}
+      WASM.worker = null;
+      wasmBoot();
+      reject(new Error('compile timed out after 3 min — engine restarted, try again'));
+    }, WASM_COMPILE_TIMEOUT);
+    WASM.pending.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
     WASM.worker.postMessage({ type: 'compile', id, files, main });
   }));
 }
@@ -235,13 +249,27 @@ function parseLatexLog(log) {
   return errors;
 }
 
-/* localStorage persistence for in-browser mode */
+/* localStorage persistence for in-browser mode. Text project files
+ * (.cls/.sty/.bib/…) are persisted too — a reload must not silently lose
+ * the class the document needs. Binary files (figures) are not; they
+ * would blow the quota. */
+const TEXTISH_RE = /\.(tex|sty|cls|def|cfg|bst|bib|clo)$/i;
 let localSaveTimer = null;
 function scheduleLocalSave() {
   clearTimeout(localSaveTimer);
   localSaveTimer = setTimeout(() => {
     try {
-      localStorage.setItem('texsync.doc', JSON.stringify({ name: state.name, source: editor.getValue() }));
+      const textFiles = {};
+      let budget = 400000; // stay well under the localStorage quota
+      for (const [name, contents] of WASM.files) {
+        if (!TEXTISH_RE.test(name)) continue;
+        const text = typeof contents === 'string' ? contents : new TextDecoder().decode(contents);
+        if (text.length > budget) continue;
+        textFiles[name] = text;
+        budget -= text.length;
+      }
+      localStorage.setItem('texsync.doc',
+        JSON.stringify({ name: state.name, source: editor.getValue(), textFiles }));
       setDirty(false);
     } catch (e) { /* quota — keep dirty */ }
   }, 600);
@@ -272,6 +300,7 @@ async function addUploadedFiles(fileList) {
     }
   }
   updateFilesBadge();
+  scheduleLocalSave();
   if (fileList.length) {
     toast(mainLoaded ? `Loaded ${state.name}` + (fileList.length > 1 ? ` + ${fileList.length - 1} project file(s)` : '')
                      : `Added ${fileList.length} project file(s)`);
@@ -291,7 +320,7 @@ function updateFilesBadge() {
     const del = document.createElement('button');
     del.textContent = '×';
     del.title = 'remove';
-    del.addEventListener('click', () => { WASM.files.delete(name); updateFilesBadge(); });
+    del.addEventListener('click', () => { WASM.files.delete(name); updateFilesBadge(); scheduleLocalSave(); });
     row.appendChild(del);
     row.appendChild(document.createTextNode(' ' + name));
     panel.appendChild(row);
@@ -821,6 +850,10 @@ line here; alt-click a line here to highlight it in the PDF.
     try { restored = JSON.parse(localStorage.getItem('texsync.doc') || 'null'); } catch (e) {}
     setFile(null, (restored && restored.name) || 'main.tex');
     setSource(restored ? restored.source : TEMPLATE);
+    for (const [name, text] of Object.entries((restored && restored.textFiles) || {})) {
+      WASM.files.set(name, text);
+    }
+    updateFilesBadge();
     if (await wasmBoot()) compile();
     return;
   }

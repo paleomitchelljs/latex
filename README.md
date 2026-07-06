@@ -22,8 +22,11 @@ It runs in two modes with the same UI:
 ## In-browser mode (the GitHub Pages deployment)
 
 - **Open** uploads files: the first `.tex` becomes the document; figures,
-  `.bib`, and `\input` files join the project (see the "+N files" badge).
-  Drag-and-drop works too.
+  `.bib`, `.cls`/`.sty`, and `\input` files join the project (see the
+  "+N files" badge). Drag-and-drop works too. `\RequirePackage` lines inside
+  uploaded classes/styles are scanned so the TeX bundles they need are
+  fetched automatically. Text project files survive a reload (localStorage);
+  re-upload figures after reloading.
 - **Save** downloads the `.tex`; **PDF ↓** downloads the compiled PDF.
 - The document autosaves to localStorage, so reloading the page restores it.
 - BibTeX runs automatically (bibtex8) when the document has a

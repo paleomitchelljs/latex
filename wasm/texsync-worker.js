@@ -115,6 +115,43 @@ self.XMLHttpRequest = class {
  * same line, so SyncTeX line numbers are unaffected. */
 let lmodernSticky = false;
 
+/* Insurance: if anything ever makes TeX read from the terminal (emscripten
+ * has no real stdin in a worker), answer EOF instead of hanging. Runs in
+ * the module's preRun phase, where the pipeline points the class's
+ * prototype at the live emscripten Module. */
+BusytexPipeline.preRun.push(function () {
+  const M = Object.getPrototypeOf(BusytexPipeline);
+  if (M && typeof M === 'object' && !M.stdin) M.stdin = () => null;
+});
+
+const TEXTISH = /\.(tex|sty|cls|def|cfg|bst|bib|clo)$/i;
+const asText = (c) =>
+  typeof c === 'string' ? c : (c && c.buffer ? new TextDecoder().decode(c) : '');
+
+/* busytex's resolver only reads \usepackage lines in the main file — a
+ * custom .cls/.sty whose \RequirePackage needs a non-preloaded bundle
+ * would never trigger that bundle's download and the compile fails.
+ * Harvest requirements from every text-ish project file, minus whatever
+ * the uploads themselves provide. */
+function harvestRequirements(files) {
+  const wanted = new Set();
+  for (const f of files) {
+    if (!TEXTISH.test(f.path)) continue;
+    for (const m of asText(f.contents)
+        .matchAll(/\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{([^}]*)\}/g)) {
+      for (const name of m[1].split(',')) {
+        const p = name.trim();
+        if (p) wanted.add(p);
+      }
+    }
+  }
+  for (const f of files) {
+    const m = f.path.split('/').pop().match(/^(.+)\.(sty|cls)$/i);
+    if (m) wanted.delete(m[1]);
+  }
+  return Array.from(wanted);
+}
+
 function injectLmodern(src) {
   if (/\\usepackage(\[[^\]]*\])?\{lmodern\}/.test(src)) return src;
   const out = src.replace(/(\\documentclass(?:\[[^\]]*\])?\{[^}]*\})/,
@@ -142,11 +179,17 @@ class TexsyncPipeline extends BusytexPipeline {
           ? { path: f.path, contents: injectLmodern(f.contents) }
           : f);
     }
-    // busytex's resolver splits \usepackage{a, b} on commas without
-    // trimming, so " b" never matches; normalize whitespace in a copy.
+    // Hand the resolver a synthetic \usepackage line carrying every
+    // requirement found across all project files (this also fixes their
+    // untrimmed handling of "\usepackage{a, b}").
+    const synthetic = harvestRequirements(files).map((p) => `\\usepackage{${p}}`).join('');
     const resolveFiles = files.map((f) =>
       f.path === main_tex_path && typeof f.contents === 'string'
-        ? { path: f.path, contents: f.contents.replace(/\\usepackage(\[[^\]]*\])?\{[^}]*\}/g, (m) => m.replace(/\s+/g, '')) }
+        // normalize "{a, b}" -> "{a,b}" (their comma split doesn't trim),
+        // then append the cross-file requirements
+        ? { path: f.path,
+            contents: f.contents.replace(/\\usepackage(\[[^\]]*\])?\{[^}]*\}/g, (m) => m.replace(/\s+/g, ''))
+              + '\n' + synthetic }
         : f);
     const resolved = await this.data_package_resolver.resolve(resolveFiles, main_tex_path, null);
     const filter_map = (f, ret_pkg = true) =>
