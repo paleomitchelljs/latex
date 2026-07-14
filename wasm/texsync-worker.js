@@ -124,6 +124,20 @@ BusytexPipeline.preRun.push(function () {
   if (M && typeof M === 'object' && !M.stdin) M.stdin = () => null;
 });
 
+/* Packages missing from every busytex bundle (e.g. multirow) live as plain
+ * .sty files in texmf/ next to this worker. Fetched on first use (null when
+ * we don't vendor it either), kept for the session, and injected into the
+ * project dir alongside the main file. */
+const vendoredSty = new Map();
+function fetchVendoredSty(name) {
+  if (!/^[\w.-]+$/.test(name)) return Promise.resolve(null);
+  if (!vendoredSty.has(name))
+    vendoredSty.set(name, self.__origFetch('texmf/' + name + '.sty')
+      .then((r) => (r.ok ? r.text() : null))
+      .catch(() => null));
+  return vendoredSty.get(name);
+}
+
 const TEXTISH = /\.(tex|sty|cls|def|cfg|bst|bib|clo)$/i;
 const asText = (c) =>
   typeof c === 'string' ? c : (c && c.buffer ? new TextDecoder().decode(c) : '');
@@ -196,7 +210,18 @@ class TexsyncPipeline extends BusytexPipeline {
       Object.entries(resolved).filter(([p, v]) => f(v)).map(([p, v]) => (ret_pkg ? p : v.source));
     let data_packages_js = Array.from(new Set(
       filter_map((v) => v.used && v.source != 'local' && v.source != null, false))).sort();
-    const unresolvedPkgs = filter_map((v) => v.source == null);
+    let unresolvedPkgs = filter_map((v) => v.source == null);
+    if (unresolvedPkgs.length > 0) {
+      const dir = main_tex_path.slice(0, main_tex_path.lastIndexOf('/') + 1);
+      const still = [];
+      for (const name of unresolvedPkgs) {
+        const sty = await fetchVendoredSty(name);
+        if (sty == null) { still.push(name); continue; }
+        post('status', { message: name + '.sty is not in any bundle — using vendored copy' });
+        files = files.concat([{ path: dir + name + '.sty', contents: sty }]);
+      }
+      unresolvedPkgs = still;
+    }
     if (unresolvedPkgs.length > 0) {
       post('status', { message: 'packages not in any bundle: ' + unresolvedPkgs.join(', ') + ' — loading all bundles' });
       data_packages_js = this.data_package_resolver.data_packages_js;
