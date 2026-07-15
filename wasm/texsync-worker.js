@@ -124,18 +124,49 @@ BusytexPipeline.preRun.push(function () {
   if (M && typeof M === 'object' && !M.stdin) M.stdin = () => null;
 });
 
-/* Packages missing from every busytex bundle (e.g. multirow) live as plain
- * .sty files in texmf/ next to this worker. Fetched on first use (null when
- * we don't vendor it either), kept for the session, and injected into the
- * project dir alongside the main file. */
-const vendoredSty = new Map();
-function fetchVendoredSty(name) {
-  if (!/^[\w.-]+$/.test(name)) return Promise.resolve(null);
-  if (!vendoredSty.has(name))
-    vendoredSty.set(name, self.__origFetch('texmf/' + name + '.sty')
+/* Packages and classes missing from every busytex bundle (e.g. multirow,
+ * exam, qrcode) live as plain .sty/.cls files in texmf/ next to this
+ * worker. Fetched on first use (null when we don't vendor it either),
+ * kept for the session, and injected into the project dir alongside the
+ * main file. */
+const vendoredFiles = new Map();
+function fetchVendored(filename) {
+  if (!/^[\w.-]+$/.test(filename)) return Promise.resolve(null);
+  if (!vendoredFiles.has(filename))
+    vendoredFiles.set(filename, self.__origFetch('texmf/' + filename)
       .then((r) => (r.ok ? r.text() : null))
       .catch(() => null));
-  return vendoredSty.get(name);
+  return vendoredFiles.get(filename);
+}
+
+/* Multi-file trees too big to vendor file-by-file ship as one texmf/*.pack
+ * blob: <uint32 LE manifest length><JSON [{n:name,s:size}]><contents...>.
+ * Fetched through fetchBig (Cache API + progress), kept for the session,
+ * flattened into the project dir (basenames are unique — enforced by the
+ * pack builder). Currently: TikZ/PGF, which no busytex bundle carries. */
+const PACKS = {
+  tikz: 'pgf.pack', pgf: 'pgf.pack', pgfkeys: 'pgf.pack', pgffor: 'pgf.pack',
+  pgfmath: 'pgf.pack', pgfcalendar: 'pgf.pack', pgfpages: 'pgf.pack',
+};
+const loadedPacks = new Map();
+function fetchPack(pack) {
+  if (!loadedPacks.has(pack))
+    loadedPacks.set(pack, (async () => {
+      const buf = await (await fetchBig('texmf/' + pack, pack)).arrayBuffer();
+      const metaLen = new DataView(buf).getUint32(0, true);
+      const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, metaLen)));
+      const entries = [];
+      let off = 4 + metaLen;
+      for (const { n, s } of meta) {
+        entries.push({ name: n, contents: new Uint8Array(buf.slice(off, off + s)) });
+        off += s;
+      }
+      return entries;
+    })().catch((e) => {
+      post('status', { message: pack + ' download failed: ' + (e.message || e) });
+      return null;
+    }));
+  return loadedPacks.get(pack);
 }
 
 const TEXTISH = /\.(tex|sty|cls|def|cfg|bst|bib|clo)$/i;
@@ -145,25 +176,71 @@ const asText = (c) =>
 /* busytex's resolver only reads \usepackage lines in the main file — a
  * custom .cls/.sty whose \RequirePackage needs a non-preloaded bundle
  * would never trigger that bundle's download and the compile fails.
- * Harvest requirements from every text-ish project file, minus whatever
- * the uploads themselves provide. */
-function harvestRequirements(files) {
-  const wanted = new Set();
+ * Harvest packages and document classes from every text-ish project file
+ * (comments stripped), minus whatever the project files themselves provide. */
+function harvestNeeds(files) {
+  const packages = new Set();
+  const classes = new Set();
   for (const f of files) {
     if (!TEXTISH.test(f.path)) continue;
-    for (const m of asText(f.contents)
-        .matchAll(/\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{([^}]*)\}/g)) {
+    const text = asText(f.contents).replace(/(^|[^\\])%.*$/gm, '$1');
+    for (const m of text
+        .matchAll(/\\(?:usepackage|RequirePackage(?:WithOptions)?)(?:\[[^\]]*\])?\{([^}]*)\}/g)) {
       for (const name of m[1].split(',')) {
         const p = name.trim();
-        if (p) wanted.add(p);
+        if (p) packages.add(p);
       }
+    }
+    for (const m of text
+        .matchAll(/\\(?:documentclass|LoadClass(?:WithOptions)?)(?:\[[^\]]*\])?\{([^}]*)\}/g)) {
+      const c = m[1].trim();
+      if (c) classes.add(c);
     }
   }
   for (const f of files) {
     const m = f.path.split('/').pop().match(/^(.+)\.(sty|cls)$/i);
-    if (m) wanted.delete(m[1]);
+    if (m) (m[2].toLowerCase() === 'cls' ? classes : packages).delete(m[1]);
   }
-  return Array.from(wanted);
+  return { packages, classes };
+}
+
+/* Inject vendored texmf/ copies of any needed package/class the project
+ * doesn't provide itself. Iterate so a vendored file's own \RequirePackage
+ * needs are seen too (and end up in the resolver's synthetic line). Names
+ * that bundles provide are simply not vendored, so the fetch misses and
+ * nothing changes for them. */
+async function injectVendored(files, dir) {
+  const applied = new Set();
+  for (let pass = 0; pass < 4; pass++) {
+    const needs = harvestNeeds(files);
+    let added = false;
+    for (const name of needs.packages) {
+      const pack = PACKS[name];
+      if (!pack || applied.has(pack)) continue;
+      applied.add(pack);
+      const entries = await fetchPack(pack);
+      if (entries == null) continue;
+      post('status', { message: name + ' is not in any bundle — injecting ' + pack + ' (' + entries.length + ' files)' });
+      const have = new Set(files.map((f) => f.path.split('/').pop()));
+      files = files.concat(entries.filter((e) => !have.has(e.name))
+        .map((e) => ({ path: dir + e.name, contents: e.contents })));
+      added = true;
+    }
+    const wanted = [
+      ...Array.from(needs.packages, (p) => p + '.sty'),
+      ...Array.from(needs.classes, (c) => c + '.cls'),
+    ];
+    for (const filename of wanted) {
+      if (files.some((f) => f.path.split('/').pop() === filename)) continue;
+      const body = await fetchVendored(filename);
+      if (body == null) continue;
+      post('status', { message: filename + ' is not in any bundle — using vendored copy' });
+      files = files.concat([{ path: dir + filename, contents: body }]);
+      added = true;
+    }
+    if (!added) break;
+  }
+  return files;
 }
 
 function injectLmodern(src) {
@@ -193,10 +270,14 @@ class TexsyncPipeline extends BusytexPipeline {
           ? { path: f.path, contents: injectLmodern(f.contents) }
           : f);
     }
+    const dir = main_tex_path.slice(0, main_tex_path.lastIndexOf('/') + 1);
+    files = await injectVendored(files, dir);
+
     // Hand the resolver a synthetic \usepackage line carrying every
     // requirement found across all project files (this also fixes their
     // untrimmed handling of "\usepackage{a, b}").
-    const synthetic = harvestRequirements(files).map((p) => `\\usepackage{${p}}`).join('');
+    const synthetic = Array.from(harvestNeeds(files).packages)
+      .map((p) => `\\usepackage{${p}}`).join('');
     const resolveFiles = files.map((f) =>
       f.path === main_tex_path && typeof f.contents === 'string'
         // normalize "{a, b}" -> "{a,b}" (their comma split doesn't trim),
@@ -210,18 +291,14 @@ class TexsyncPipeline extends BusytexPipeline {
       Object.entries(resolved).filter(([p, v]) => f(v)).map(([p, v]) => (ret_pkg ? p : v.source));
     let data_packages_js = Array.from(new Set(
       filter_map((v) => v.used && v.source != 'local' && v.source != null, false))).sort();
-    let unresolvedPkgs = filter_map((v) => v.source == null);
-    if (unresolvedPkgs.length > 0) {
-      const dir = main_tex_path.slice(0, main_tex_path.lastIndexOf('/') + 1);
-      const still = [];
-      for (const name of unresolvedPkgs) {
-        const sty = await fetchVendoredSty(name);
-        if (sty == null) { still.push(name); continue; }
-        post('status', { message: name + '.sty is not in any bundle — using vendored copy' });
-        files = files.concat([{ path: dir + name + '.sty', contents: sty }]);
-      }
-      unresolvedPkgs = still;
-    }
+    // Their resolver mis-parses \ProvidesPackage and so never counts our
+    // injected copies as local — don't let those trip the load-everything
+    // fallback below.
+    const provided = new Set(files
+      .map((f) => (f.path.split('/').pop().match(/^(.+)\.(sty|cls)$/i) || [])[1])
+      .filter(Boolean));
+    const unresolvedPkgs = filter_map((v) => v.source == null)
+      .filter((p) => !provided.has(p));
     if (unresolvedPkgs.length > 0) {
       post('status', { message: 'packages not in any bundle: ' + unresolvedPkgs.join(', ') + ' — loading all bundles' });
       data_packages_js = this.data_package_resolver.data_packages_js;

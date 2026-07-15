@@ -90,6 +90,11 @@ Notes:
 - `wasm/` — in-browser engine: `texsync-worker.js` (our worker: synctex,
   reruns, caching, lmodern fallback) wrapping `busytex_pipeline.js` and the
   busytex WASM/TeX Live binaries (MIT-licensed, from the busytex project)
+- `wasm/texmf/` — packages and classes missing from every busytex bundle,
+  injected on demand: single files (`multirow.sty`, `exam.cls`,
+  `qrcode.sty`, `enumitem.sty`) plus `pgf.pack`, the whole TikZ/PGF tree
+  in one blob (`<uint32 manifest length><JSON manifest><contents…>`,
+  built from a local TeX Live; see `PACKS` in `texsync-worker.js`)
 - `example.tex` — two-page demo exercising the sync
 
 ## How the sync works
